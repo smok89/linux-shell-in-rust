@@ -11,6 +11,7 @@ use rustyline::hint::HistoryHinter;
 use rustyline::validate::MatchingBracketValidator;
 use rustyline::{CompletionType, Config, EditMode, Editor, Hinter, Helper, Validator, Completer};
 use rustyline::config::ColorMode;
+use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 
 
 #[macro_use]
@@ -145,9 +146,17 @@ fn main() {
             if rl.save_history(&format!("{}/.rust_shell_history", home)).is_err() {
                 println!("Could not save history.");
             };
-        }   
+        } 
 
-        let mut commands = trimmed.split(" | ") // handling pipes
+        // check if the command runs in the background ('&' symbol at the end)
+        let runs_background = trimmed.ends_with('&');
+        let commands_without_ampersand = if runs_background {
+            &trimmed[..trimmed.len()-1] // remove '&'
+        } else { 
+            trimmed
+        };        
+
+        let mut commands = commands_without_ampersand.split(" | ") // handling pipes
                                                             .peekable(); // create iterator that does not consumes elements 
         let mut previous_command = None; // used for pipes
 
@@ -196,7 +205,10 @@ fn main() {
                     let stdout = if commands.peek().is_some() {
                         Stdio::piped() // pipes the output to the following command
                     } else {
-                        Stdio::inherit() // output is printed in the terminal
+                        if !runs_background 
+                            {Stdio::inherit()} // output is printed in the terminal
+                        else 
+                            {Stdio::null()} // output is sent to /dev/null for background processes
                     };
 
                     let output = Command::new(command)
@@ -217,7 +229,32 @@ fn main() {
         }
 
         if let Some(mut final_command) = previous_command {
+            if !runs_background {
             let _ = final_command.wait(); // wait for all processes to finish before printing the prompt again
+            }
+            // if running in background, don't wait
         }
+
+        // we need to check for any child process in background ; ressources are freed only after a wait
+        // if we don't wait for a child process, its pid is never freed
+        
+        loop {
+            let wait_result = waitpid(None, Some(WaitPidFlag::WNOHANG));
+            match wait_result {
+                Ok(WaitStatus::StillAlive) => {
+                    // No child process has exited yet, go back to the beginning of the main loop
+                    break;
+                }
+                Ok(_wait_status) => { 
+                    // A child has exited, check if there is another
+                    continue;
+                    }  
+                Err(_) => { // e.g. no child process
+                    break;
+                }     
+            }
+        }
+        
+
     }
 }
