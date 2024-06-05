@@ -3,19 +3,21 @@ extern crate libc;
 extern crate lazy_static;
 
 use std::env;
-use std::io::*;
 use std::process::*;
 use std::path::Path;
+use std::io;
 use nix::sys::signal;
 use std::sync::atomic::{AtomicBool, Ordering};
+use rustyline::error::ReadlineError;
+use rustyline::DefaultEditor;
+use std::fs::File;
 
 // Atomic flag to track the interrupt signal
 lazy_static! {
     static ref INTERRUPTED: AtomicBool = AtomicBool::new(false);
 }
 
-    // Handler function for SIGINT
-
+// Handler function for SIGINT
 extern "C" fn handle_sigint(_sig: i32) {
     INTERRUPTED.store(true, Ordering::SeqCst);
 }
@@ -33,6 +35,14 @@ fn main() {
         .expect("Error setting SIGINT handler");
     }
 
+    // History implementation with rustyline
+    let mut rl = DefaultEditor::new().unwrap(); // new editor
+    let home = env::var("HOME").unwrap(); // get home path
+    if rl.load_history(&format!("{}/.rust_shell_history", home)).is_err() {
+        println!("No previous history.");
+        File::create(format!("{}/.rust_shell_history", home)).expect("Couldn't create history file");
+    }
+
     // loop to get and execute commands
     loop { 
         // Check if the interrupt flag is set and handle it
@@ -41,6 +51,10 @@ fn main() {
             INTERRUPTED.store(false, Ordering::SeqCst); // Reset the flag
             continue; // Get back to the start of the loop
         }
+
+        /* This was the first implementation, but as I found out about rustyline, I used it instead.
+        rustyline can handle Ctrl+C, moving the cursor, move in history, autocomplete.
+        At first, I wanted to implement those features from scratch, but time is lacking :')
 
         // we want the prompt to be displayed again after executing a command
         let current_dir = env::current_dir().unwrap(); // get current working directory
@@ -55,6 +69,35 @@ fn main() {
             Err(e) => {
                 eprintln!("{}",e);
                 continue; // we go back to the beggining of the loop to ask for a valid input
+            }
+        }
+        */
+
+        // Implementation with rustyline
+
+        let mut input = String::new();
+        let current_dir = env::current_dir().unwrap(); // get current working directory
+        let readline = rl.readline(format!("{} > ", current_dir.to_str().unwrap()).as_str());
+        match readline {
+            Ok(line) => {
+                if line.len() == 0 {continue} // avoid crashing if we press Enter with no input
+                let _ = rl.add_history_entry(line.as_str());
+                input = line;
+                if rl.save_history(&format!("{}/.rust_shell_history", home)).is_err() {
+                    println!("Could not write to history.");
+                };
+            },
+            Err(ReadlineError::Interrupted) => {
+                println!("Received Ctrl+C. Use 'exit' command to quit the shell.");
+                continue
+            },
+            Err(ReadlineError::Eof) => {
+                println!("Received Ctrl+D.");
+                continue
+            },
+            Err(err) => {
+                println!("Error: {:?}", err);
+                continue
             }
         }
 
