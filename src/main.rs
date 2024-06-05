@@ -1,16 +1,21 @@
-extern crate libc;
-#[macro_use]
-extern crate lazy_static;
-
-use std::env;
+use std::borrow::Cow::{self, Borrowed, Owned};
+use std::{boxed, env};
 use std::process::*;
 use std::path::Path;
-use std::io;
 use nix::sys::signal;
 use std::sync::atomic::{AtomicBool, Ordering};
-use rustyline::error::ReadlineError;
-use rustyline::DefaultEditor;
 use std::fs::File;
+use rustyline::completion::FilenameCompleter;
+use rustyline::error::ReadlineError;
+use rustyline::highlight::{Highlighter, MatchingBracketHighlighter};
+use rustyline::hint::HistoryHinter;
+use rustyline::validate::MatchingBracketValidator;
+use rustyline::{CompletionType, Config, EditMode, Editor, Hinter, Helper, Validator, Completer};
+use rustyline::config::ColorMode;
+
+
+#[macro_use]
+extern crate lazy_static;
 
 // Atomic flag to track the interrupt signal
 lazy_static! {
@@ -21,6 +26,21 @@ lazy_static! {
 extern "C" fn handle_sigint(_sig: i32) {
     INTERRUPTED.store(true, Ordering::SeqCst);
 }
+
+#[derive(Helper, Completer, Hinter, Validator)]
+struct MyHelper {
+    #[rustyline(Completer)]
+    completer: FilenameCompleter,
+    highlighter: MatchingBracketHighlighter,
+    #[rustyline(Validator)]
+    validator: MatchingBracketValidator,
+    #[rustyline(Hinter)]
+    hinter: HistoryHinter,
+    colored_prompt: String,
+}
+
+impl Highlighter for MyHelper {}
+
 
 fn main() {
     // Set the SIGINT handler using nix's sigaction
@@ -36,7 +56,25 @@ fn main() {
     }
 
     // History implementation with rustyline
-    let mut rl = DefaultEditor::new().unwrap(); // new editor
+    let config = Config::builder()
+        .history_ignore_dups(false).unwrap()
+        .history_ignore_space(true)
+        .completion_type(CompletionType::List)
+        .edit_mode(EditMode::Emacs)
+        .color_mode(ColorMode::Forced).build();
+
+    let h = MyHelper {
+        completer: FilenameCompleter::new(),
+        highlighter: MatchingBracketHighlighter::new(),
+        hinter: HistoryHinter::new(),
+        colored_prompt: "".to_owned(),
+        validator: MatchingBracketValidator::new(),
+    };
+
+    let mut rl = Editor::with_config(config).unwrap(); // new editor
+
+    rl.set_helper(Some(h));
+
     let home = env::var("HOME").unwrap(); // get home path
     if rl.load_history(&format!("{}/.rust_shell_history", home)).is_err() {
         println!("No previous history.");
@@ -53,7 +91,7 @@ fn main() {
         }
 
         /* This was the first implementation, but as I found out about rustyline, I used it instead.
-        rustyline can handle Ctrl+C, moving the cursor, move in history, autocomplete.
+        rustyline can handle Ctrl+C, moving the cursor left and right keys, and search the histor with up and down.
         At first, I wanted to implement those features from scratch, but time is lacking :')
 
         // we want the prompt to be displayed again after executing a command
@@ -75,7 +113,7 @@ fn main() {
 
         // Implementation with rustyline
 
-        let mut input = String::new();
+        let input;
         let current_dir = env::current_dir().unwrap(); // get current working directory
         let readline = rl.readline(format!("{} > ", current_dir.to_str().unwrap()).as_str());
         match readline {
@@ -84,7 +122,7 @@ fn main() {
                 let _ = rl.add_history_entry(line.as_str());
                 input = line;
                 if rl.save_history(&format!("{}/.rust_shell_history", home)).is_err() {
-                    println!("Could not write to history.");
+                    println!("Could not save history.");
                 };
             },
             Err(ReadlineError::Interrupted) => {
