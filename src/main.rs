@@ -160,10 +160,10 @@ fn main() {
                                                             .peekable(); // create iterator that does not consumes elements 
         let mut previous_command = None; // used for pipes
 
-        while let Some(command) = commands.next() {
+        while let Some(command) = commands.next() { // iterate over the commands separated by pipes
 
             let mut parts = command.trim().split_whitespace(); // get an iterator with command name and arguments
-            let command = parts.next().unwrap(); // get the command name ; unwrap because it is a Result
+            let command = parts.next().unwrap(); // get the command name = first element ; unwrap because it is a Result
             let mut args = parts; // get the rest = the arguments
 
             match command {
@@ -189,20 +189,35 @@ fn main() {
                     let working_dir = env::current_dir().unwrap();
                     println!("cwd : {}", working_dir.to_str().unwrap());
 
-                    previous_command = None; // TODO : handle the piping to a following command
+                    previous_command = None; 
                 },
-                "exit" => return, // quit the program
+                "exit" => {
+                    if !args.next().is_none() { // not expecting any arg
+                        eprintln!("No argument required for pwd.");
+                        break; // quit the while loop and get back to the main loop
+                    };
+                    return; // quit the program
+                }, 
                 
-                "history" => print_history(&mut rl),
+                "history" => {
+                    if !args.next().is_none() { // not expecting any arg
+                        eprintln!("No argument required for pwd.");
+                        break; // quit the while loop and get back to the main loop
+                    };
+                    previous_command = None; 
+                    print_history(&mut rl);
+                },
 
 
                 // if it's not a shell builtin:
                 command => {
-                    let stdin = previous_command.map_or(Stdio::inherit(), 
-                        |output: Child| Stdio::from(output.stdout.unwrap())
+
+                    // default values for stdin, stdout and stderr (considering pipes)
+                    let mut stdin = previous_command.map_or(Stdio::inherit(), 
+                    |output: Child| Stdio::from(output.stdout.unwrap())
                     );
 
-                    let stdout = if commands.peek().is_some() {
+                    let mut stdout = if commands.peek().is_some() {
                         Stdio::piped() // pipes the output to the following command
                     } else {
                         if !runs_background 
@@ -211,10 +226,68 @@ fn main() {
                             {Stdio::null()} // output is sent to /dev/null for background processes
                     };
 
+                    let mut stderr = Stdio::inherit();
+
+                    // check for redirection (>, <, 2>)
+                    let mut clone_args = args.clone().peekable();
+
+                    loop {
+                        match clone_args.peek() {
+                            Some(&arg) => {
+                                if arg == ">" {
+                                    // handle standard output redirection (>)
+                                    clone_args.next(); // skip ">"
+                                    let filename = Path::new(clone_args.next().unwrap().trim());
+                                    stdout = Stdio::from(File::create(filename).unwrap());
+                                    break;
+                                } else if arg == "<" {
+                                    // handle standard input redirection (<)
+                                    clone_args.next(); // skip "<"
+                                    let filename = Path::new(clone_args.next().unwrap().trim());
+                                    stdin = Stdio::from(File::open(filename).unwrap());
+                                    break;
+                                } else if arg == "2>" {
+                                    // handle standard error redirection (2>)
+                                    clone_args.next(); // skip "2>"
+                                    let filename = Path::new(clone_args.next().unwrap().trim());
+                                    stderr = Stdio::from(File::create(filename).unwrap());
+                                    break;
+                                } else {
+                                    if clone_args.next().is_none() {
+                                        break;
+                                    }
+                                }
+                            }
+                            None => {break;},
+                        }
+                        
+                    }
+
+                    let mut args = args.peekable();
+
+                    let mut truncated_args: Vec<&str> = Vec::new();
+
+                    loop {
+                        match args.peek() {
+                            Some(&arg) => {
+                                if arg == ">" || arg == "<" || arg == "2>" {
+                                    // Truncate arguments before redirection symbol
+                                    break;
+                                } else {
+                                    truncated_args.push(args.next().unwrap());
+                                }
+                            }
+                            None => {
+                                break;
+                            }
+                        }
+                    }
+
                     let output = Command::new(command)
-                        .args(args)
+                        .args(truncated_args)
                         .stdin(stdin)
                         .stdout(stdout)
+                        .stderr(stderr)
                         .spawn(); // output is an handle to the child process created
 
                     match output {

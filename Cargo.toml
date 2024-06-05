@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+libc = "0.2.155"
 nix = "0.23"
 lazy_static = "1.4"
 rustyline = { version = "14.0.0", features = ["derive"] }

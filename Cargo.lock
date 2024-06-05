@@ -242,6 +242,7 @@ name = "shell_linux"
 version = "0.1.0"
 dependencies = [
  "lazy_static",
+ "libc",
  "nix 0.23.2",
  "rustyline",
 ]
