@@ -1,11 +1,48 @@
+extern crate libc;
+#[macro_use]
+extern crate lazy_static;
+
 use std::env;
 use std::io::*;
 use std::process::*;
 use std::path::Path;
+use nix::sys::signal;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+// Atomic flag to track the interrupt signal
+lazy_static! {
+    static ref INTERRUPTED: AtomicBool = AtomicBool::new(false);
+}
+
+    // Handler function for SIGINT
+
+extern "C" fn handle_sigint(_sig: i32) {
+    INTERRUPTED.store(true, Ordering::SeqCst);
+}
 
 fn main() {
-    loop { // we want the prompt to be displayed again after executing a command
+    // Set the SIGINT handler using nix's sigaction
+    unsafe {
+        signal::sigaction(
+            signal::SIGINT, &signal::SigAction::new(
+                signal::SigHandler::Handler(handle_sigint),
+                signal::SaFlags::empty(),
+                signal::SigSet::empty(),
+            ),
+        )
+        .expect("Error setting SIGINT handler");
+    }
+
+    // loop to get and execute commands
+    loop { 
+        // Check if the interrupt flag is set and handle it
+        if INTERRUPTED.load(Ordering::SeqCst) {
+            println!("\nReceived Ctrl+C. Use 'exit' command to quit the shell.");
+            INTERRUPTED.store(false, Ordering::SeqCst); // Reset the flag
+            continue; // Get back to the start of the loop
+        }
+
+        // we want the prompt to be displayed again after executing a command
         let current_dir = env::current_dir().unwrap(); // get current working directory
         print!("{} > ", current_dir.to_str().unwrap()); // display the prompt with cwd
         let _ = stdout().flush(); // displays everything currently in the buffer : displays the prompt immediately
