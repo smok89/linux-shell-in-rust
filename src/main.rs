@@ -1,5 +1,4 @@
-use std::borrow::Cow::{self, Borrowed, Owned};
-use std::{boxed, env};
+use std::env;
 use std::process::*;
 use std::path::Path;
 use nix::sys::signal;
@@ -7,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::fs::File;
 use rustyline::completion::FilenameCompleter;
 use rustyline::error::ReadlineError;
-use rustyline::highlight::{Highlighter, MatchingBracketHighlighter};
+use rustyline::highlight::Highlighter;
 use rustyline::hint::HistoryHinter;
 use rustyline::validate::MatchingBracketValidator;
 use rustyline::{CompletionType, Config, EditMode, Editor, Hinter, Helper, Validator, Completer};
@@ -31,16 +30,20 @@ extern "C" fn handle_sigint(_sig: i32) {
 struct MyHelper {
     #[rustyline(Completer)]
     completer: FilenameCompleter,
-    highlighter: MatchingBracketHighlighter,
     #[rustyline(Validator)]
     validator: MatchingBracketValidator,
     #[rustyline(Hinter)]
     hinter: HistoryHinter,
-    colored_prompt: String,
 }
 
 impl Highlighter for MyHelper {}
 
+fn print_history(rl: &mut Editor<MyHelper, rustyline::history::FileHistory>) {
+    let history = rl.history();
+    for (index, entry) in history.iter().enumerate() {
+        println!("{}: {}", index + 1, entry);
+    }
+}
 
 fn main() {
     // Set the SIGINT handler using nix's sigaction
@@ -59,15 +62,13 @@ fn main() {
     let config = Config::builder()
         .history_ignore_dups(false).unwrap()
         .history_ignore_space(true)
-        .completion_type(CompletionType::List)
+        .completion_type(CompletionType::Circular)
         .edit_mode(EditMode::Emacs)
         .color_mode(ColorMode::Forced).build();
 
     let h = MyHelper {
         completer: FilenameCompleter::new(),
-        highlighter: MatchingBracketHighlighter::new(),
         hinter: HistoryHinter::new(),
-        colored_prompt: "".to_owned(),
         validator: MatchingBracketValidator::new(),
     };
 
@@ -119,11 +120,7 @@ fn main() {
         match readline {
             Ok(line) => {
                 if line.len() == 0 {continue} // avoid crashing if we press Enter with no input
-                let _ = rl.add_history_entry(line.as_str());
                 input = line;
-                if rl.save_history(&format!("{}/.rust_shell_history", home)).is_err() {
-                    println!("Could not save history.");
-                };
             },
             Err(ReadlineError::Interrupted) => {
                 println!("Received Ctrl+C. Use 'exit' command to quit the shell.");
@@ -139,8 +136,18 @@ fn main() {
             }
         }
 
-        let mut commands = input.trim() // removes trailing whitespaces
-                                                            .split(" | ") // handling pipes
+        let trimmed = input.trim(); // removes trailing whitespaces
+
+        // save the command in the history ; history and pwd are not saved
+        if trimmed != "history" && trimmed != "pwd" { 
+            let _ = rl.add_history_entry(trimmed);
+                    
+            if rl.save_history(&format!("{}/.rust_shell_history", home)).is_err() {
+                println!("Could not save history.");
+            };
+        }   
+
+        let mut commands = trimmed.split(" | ") // handling pipes
                                                             .peekable(); // create iterator that does not consumes elements 
         let mut previous_command = None; // used for pipes
 
@@ -176,6 +183,9 @@ fn main() {
                     previous_command = None; // TODO : handle the piping to a following command
                 },
                 "exit" => return, // quit the program
+                
+                "history" => print_history(&mut rl),
+
 
                 // if it's not a shell builtin:
                 command => {
